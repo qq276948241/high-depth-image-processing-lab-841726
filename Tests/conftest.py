@@ -1,0 +1,108 @@
+from __future__ import annotations
+
+import io
+import os
+import sys
+
+import pytest
+
+from PIL import Image
+
+from .helper import is_freethreaded
+
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from collections.abc import Generator
+
+gil_enabled_at_start = True
+if is_freethreaded():
+    gil_enabled_at_start = sys._is_gil_enabled()  # type: ignore[attr-defined]
+
+TSAN_ENABLED = os.environ.get("PILLOW_TSAN_TEST") == "1"
+
+
+def pytest_report_header(config: pytest.Config) -> str:
+    try:
+        from PIL import features
+
+        with io.StringIO() as out:
+            features.pilinfo(out=out, supported_formats=False)
+            return out.getvalue()
+    except Exception as e:
+        return f"pytest_report_header failed: {e}"
+
+
+def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
+    if (
+        is_freethreaded()
+        and not gil_enabled_at_start
+        and sys._is_gil_enabled()  # type: ignore[attr-defined]
+    ):
+        tr = terminalreporter
+        tr.ensure_newline()
+        tr.section("GIL re-enabled", red=True, bold=True)
+        tr.line("The GIL was re-enabled at runtime during the tests.")
+        tr.line("This can happen with no test failures if the RuntimeWarning")
+        tr.line("raised by Python when this happens is filtered by a test.")
+        tr.line("")
+        tr.line("Please ensure all new C modules declare support for running")
+        tr.line("without the GIL. Any new tests that intentionally imports")
+        tr.line("code that re-enables the GIL should do so in a subprocess.")
+        pytest.exit("GIL re-enabled during tests", returncode=1)
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "pil_noop_mark: A conditional mark where nothing special happens",
+    )
+
+    # We're marking some tests to ignore valgrind errors and XFAIL them.
+    # Ensure that the mark is defined
+    # even in cases where pytest-valgrind isn't installed
+    try:
+        config.addinivalue_line(
+            "markers",
+            "valgrind_known_error: Tests that have known issues with valgrind",
+        )
+    except Exception:
+        # valgrind is already installed
+        pass
+
+
+@pytest.fixture(autouse=TSAN_ENABLED)
+def tsan_parse(capfd: pytest.CaptureFixture[str]) -> Generator[None]:
+    # TSAN has two error modes, return a non-zero return code from the process
+    # or stop on error. Neither of these are really useful for us in a longrunning
+    # process, so we're hacking around this by reading stderr and looking for the
+    # TSAN Warning.
+    yield
+    out, err = capfd.readouterr()
+    if "WARNING: ThreadSanitizer" in err:
+        msg = "ThreadSanitizer Warning"
+        raise Exception(msg)
+
+
+@pytest.fixture
+def enable_block_allocator() -> Generator[None]:
+    """
+    Enable the block allocator for image storage.
+    """
+    Image.core.set_use_block_allocator(1)
+    try:
+        yield
+    finally:
+        Image.core.set_use_block_allocator(0)
+
+
+@pytest.fixture
+def aligned_arena() -> Generator[None]:
+    """
+    Configure the global image allocator to use a 64-byte alignment.
+    """
+    alignment = Image.core.get_alignment()
+    Image.core.set_alignment(64)
+    try:
+        yield
+    finally:
+        Image.core.set_alignment(alignment)

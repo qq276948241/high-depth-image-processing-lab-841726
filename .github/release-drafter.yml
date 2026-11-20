@@ -1,0 +1,39 @@
+name-template: "$RESOLVED_VERSION"
+tag-template: "$RESOLVED_VERSION"
+change-template: '- $TITLE #$NUMBER [@$AUTHOR]'
+
+categories:
+  - type: "version-resolver"
+    semver-increment: "major"
+    when:
+      label: "Major"
+  - type: "version-resolver"
+    semver-increment: "minor"
+  - title: "Removals"
+    when:
+      label: "Removal"
+  - title: "Deprecations"
+    when:
+      label: "Deprecation"
+  - title: "Documentation"
+    when:
+      label: "Documentation"
+  - title: "Dependencies"
+    when:
+      label: "Dependency"
+  - title: "Testing"
+    when:
+      label: "Testing"
+  - title: "Type hints"
+    when:
+      label: "Type hints"
+  - title: "Other changes"
+  - type: "pre-exclude"
+    when:
+      label: "changelog: skip"
+
+template: |
+
+  https://pillow.readthedocs.io/en/stable/releasenotes/$RESOLVED_VERSION.html
+
+  $CHANGES

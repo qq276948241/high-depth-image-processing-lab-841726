@@ -1,0 +1,100 @@
+from __future__ import annotations
+
+import struct
+from io import BytesIO
+
+import pytest
+
+from PIL import Image, QoiImagePlugin, _binary
+
+from .helper import assert_image_equal_tofile, hopper
+
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+def test_sanity() -> None:
+    with Image.open("Tests/images/hopper.qoi") as im:
+        assert im.mode == "RGB"
+        assert im.size == (128, 128)
+        assert im.format == "QOI"
+
+        assert_image_equal_tofile(im, "Tests/images/hopper.png")
+
+    with Image.open("Tests/images/pil123rgba.qoi") as im:
+        assert im.mode == "RGBA"
+        assert im.size == (162, 150)
+        assert im.format == "QOI"
+
+        assert_image_equal_tofile(im, "Tests/images/pil123rgba.png")
+
+
+def test_invalid_file() -> None:
+    invalid_file = "Tests/images/flower.jpg"
+
+    with pytest.raises(SyntaxError):
+        QoiImagePlugin.QoiImageFile(invalid_file)
+
+
+@pytest.mark.parametrize("length", (14, 44, 48, 55))
+def test_truncated(length: int) -> None:
+    with open("Tests/images/pil123rgba.qoi", "rb") as fp:
+        data = fp.read()[:length]
+    with Image.open(BytesIO(data)) as im:
+        with pytest.raises(ValueError, match="not enough image data"):
+            im.load()
+
+
+def test_op_index() -> None:
+    # QOI_OP_INDEX as the first chunk
+    with Image.open("Tests/images/op_index.qoi") as im:
+        assert im.getpixel((0, 0)) == (0, 0, 0, 0)
+
+
+@pytest.mark.parametrize("mode", ("RGB", "RGBA"))
+@pytest.mark.parametrize("run_length", (1, 2, 62))
+def test_op_run_updates_index(mode: str, run_length: int) -> None:
+    size = run_length + 2, 1
+    channels = len(mode)
+    header = b"qoif" + struct.pack(">IIBB", *size, channels, 0)
+    op_run = 3 << 6
+    op_rgba = _binary.o8(0b11111111)
+    black = (0, 0, 0, 255)
+    gray = (1, 2, 3, 4)
+    stream_end = b"\x00" * 7 + b"\x01"
+    data = (
+        header
+        # OP_RUN of the initial opaque black pixel
+        + _binary.o8(op_run | (run_length - 1))
+        # OP_RGBA with a different index
+        + op_rgba
+        + struct.pack("4B", *gray)
+        # OP_INDEX: opaque black
+        + _binary.o8((black[0] * 3 + black[1] * 5 + black[2] * 7 + black[3] * 11) % 64)
+        + stream_end
+    )
+    expected = tuple(pixel[:channels] for pixel in [*[black] * run_length, gray, black])
+    with Image.open(BytesIO(data)) as im:
+        assert im.mode == mode
+        assert im.size == size
+        assert im.get_flattened_data() == expected
+
+
+def test_save(tmp_path: Path) -> None:
+    f = tmp_path / "temp.qoi"
+
+    im = hopper()
+    im.save(f, colorspace="sRGB")
+
+    assert_image_equal_tofile(im, f)
+
+    for path in ("Tests/images/default_font.png", "Tests/images/pil123rgba.png"):
+        with Image.open(path) as im:
+            im.save(f)
+
+            assert_image_equal_tofile(im, f)
+
+    im = hopper("P")
+    with pytest.raises(ValueError, match="Unsupported QOI image mode"):
+        im.save(f)

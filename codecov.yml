@@ -1,0 +1,19 @@
+# Documentation: https://docs.codecov.com/docs/codecov-yaml
+
+codecov:
+  # Avoid "Missing base report" when the base commit ran no tests,
+  # such as docs-only changes skipped by paths-ignore in the test workflows
+  allow_coverage_offsets: true
+
+comment: false
+
+coverage:
+  status:
+    project:
+      default:
+        threshold: 0.1%
+
+# Matches 'omit:' in .coveragerc
+ignore:
+  - "checks/*.py"
+  - "Tests/createfontdatachunk.py"
