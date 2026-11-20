@@ -76,6 +76,11 @@ docs/_build/
 
 #OS
 .DS_Store
+.env
+.env.*
+*.pem
+*.key
+secrets*
 
 # JetBrains
 .idea
