@@ -93,6 +93,7 @@ urls.Source = "https://github.com/python-pillow/Pillow"
 [tool.setuptools]
 packages = [
   "PIL",
+  "PIL.highdepth",
 ]
 package-dir = { "" = "src" }
 include-package-data = true

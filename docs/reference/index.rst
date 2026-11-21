@@ -15,6 +15,7 @@ Reference
    ImageFilter
    ImageFont
    ImageGrab
+   highdepth
    ImageMath
    ImageMorph
    ImageOps

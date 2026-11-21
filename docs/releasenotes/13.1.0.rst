@@ -39,8 +39,19 @@ TODO
 
 TODO
 
+
 API additions
 =============
+
+High depth and palette pipeline
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+:py:mod:`PIL.highdepth` adds a strict, lossless path for images whose
+precision the classic ``Image`` API cannot carry: 1/2/4/8/16-bit PNG, TIFF and
+BMP decoding into a normalized model, deterministic palette quantization with
+alpha-aware dithering, a fixed-stage colour management pipeline, and streaming
+budget-checked encoders with atomic output.  The existing modules and plugins
+are unchanged; see :doc:`../reference/highdepth`.
 
 ImageDraw dash
 ^^^^^^^^^^^^^^
