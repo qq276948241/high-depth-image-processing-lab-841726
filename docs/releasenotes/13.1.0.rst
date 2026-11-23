@@ -64,6 +64,50 @@ Two new image processing operations are available in ImageOps.
 * :py:meth:`~PIL.ImageOps.neon`: apply a neon glow effect, with arguments for color and
   alpha
 
+High depth image support
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+:py:mod:`PIL.HighDepth` decodes PNG, TIFF and BMP data with full precision
+sample planes.  The same bytes may be supplied as a path, a binary file
+object, a bytes object or an iterable of chunks; all return identical pixels
+and metadata.  Truncated rows, contradictory chunk lengths, invalid colour
+tables and size overflows raise :py:exc:`PIL.HighDepth.DecodeError` before a
+pixel buffer is allocated, and a :py:class:`PIL.HighDepth.MemoryBudget` can
+reject an image before decoding.
+
+:py:func:`PIL.Image.open_high_depth` and
+:py:func:`PIL.ImageFile.decode_high_depth` are public shortcuts for the
+reader.
+
+:py:mod:`PIL.Quantize` adds a deterministic quantizer for the modes that the
+C quantizer cannot handle, including I;16, I, LA and PA images, reachable
+through :py:meth:`~PIL.Image.Image.quantize`,
+:py:meth:`~PIL.Image.Image.convert` and
+:py:func:`PIL.Image.quantize_high_depth`.  Palette order, colour distance,
+tie-breaking and Floyd-Steinberg rounding are fixed, so repeated calls with the
+same input and arguments produce identical bytes.
+
+:py:mod:`PIL.ImageCms` gains fixed-stage helpers: :py:class:`PIL.ImageCms.Stage`
+orders linearization, the ICC transform, gamma and encoding;
+:py:func:`~PIL.ImageCms.applyStages` runs them on a copy;
+:py:func:`~PIL.ImageCms.validateProfile` and
+:py:func:`~PIL.ImageCms.normalize_profile` give deterministic results for
+missing or damaged profiles; and :py:func:`~PIL.ImageCms.repeatTransform`
+applies a transform repeatedly without touching the source on failure.
+
+:py:mod:`PIL.HighDepthWrite` saves high depth PNG, TIFF and BMP files with a
+memory budget check, cooperative cancellation and atomic path output.
+:py:class:`PIL.HighDepthWrite.Cancel` stops the encoder between blocks, and
+:py:func:`PIL.Image.save_high_depth` is a public shortcut.  Writing 16-bit
+grayscale as BMP raises instead of silently dropping precision, because BMP's
+only 16-bit layout is lossy RGB 5-6-5.
+
+Reading 16-bit RGB transparency
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The transparent colour of a 16-bit RGB PNG is now compared in the same 8-bit
+space as the decoded image, so ``tRNS`` works for those files.
+
 Other changes
 =============
 

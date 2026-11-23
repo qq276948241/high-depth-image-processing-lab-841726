@@ -34,6 +34,11 @@ Example: Parse an image
     im.save("copy.jpg")
 
 
+Functions
+---------
+
+.. autofunction:: decode_high_depth
+
 Classes
 -------
 

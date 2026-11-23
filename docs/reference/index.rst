@@ -15,6 +15,8 @@ Reference
    ImageFilter
    ImageFont
    ImageGrab
+   HighDepth
+   HighDepthWrite
    ImageMath
    ImageMorph
    ImageOps
@@ -33,6 +35,7 @@ Reference
    JpegPresets
    PSDraw
    PixelAccess
+   Quantize
    features
    ../PIL
    plugins

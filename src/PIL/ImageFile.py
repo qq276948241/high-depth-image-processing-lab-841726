@@ -990,3 +990,28 @@ class PyEncoder(PyCodec):
             if bytes_consumed > 0:
                 os.write(fh, buf[:bytes_consumed])
         return errcode
+
+
+def decode_high_depth(
+    source: object,
+    *,
+    frame: int = 0,
+    budget: object = None,
+) -> Image.Image:
+    """
+    Decode a PNG, TIFF or BMP source with the high depth reader.
+
+    This mirrors :py:func:`PIL.Image.open` but accepts a bytes object, a path,
+    a binary file object or an iterable of byte chunks.  All input methods
+    return identical pixels and metadata for the same data, and structural
+    errors are raised before a pixel buffer is allocated.
+
+    :param source: A path, binary file object, bytes object or chunk iterable.
+    :param frame: TIFF frame number.
+    :param budget: Optional :class:`PIL.HighDepth.MemoryBudget`.
+    :returns: An :py:class:`~PIL.Image.Image`.
+    """
+
+    from . import HighDepth
+
+    return HighDepth.read(source, frame=frame, budget=budget)

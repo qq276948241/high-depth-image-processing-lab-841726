@@ -1069,3 +1069,318 @@ def isIntentSupported(
             return -1
     except (AttributeError, OSError, TypeError, ValueError) as v:
         raise PyCMSError(v) from v
+
+
+# --------------------------------------------------------------------.
+# Fixed-stage colour management
+# --------------------------------------------------------------------.
+
+
+class Stage(IntEnum):
+    """The fixed order of colour management stages."""
+
+    LINEARIZE = 0
+    """Convert the source samples to linear light."""
+
+    TRANSFORM = 1
+    """Apply the ICC transform between profiles."""
+
+    GAMMA = 2
+    """Apply an explicit gamma correction."""
+
+    ENCODE = 3
+    """Encode the result for the output colour space."""
+
+
+class ColorProfileError(PyCMSError):
+    """Raised when an ICC profile is missing, damaged or unsupported."""
+
+
+def _profile_bytes(profile: _CmsProfileCompatible) -> bytes:
+    try:
+        if isinstance(profile, (bytes, bytearray, memoryview)):
+            # Profile bytes are re-opened so damaged data is rejected here.
+            return core.profile_tobytes(core.profile_frombytes(bytes(profile)))
+        if not isinstance(profile, ImageCmsProfile):
+            profile = ImageCmsProfile(profile)
+        return profile.tobytes()
+    except (OSError, TypeError, ValueError, AttributeError) as e:
+        raise ColorProfileError(e) from e
+
+
+def validateProfile(profile: _CmsProfileCompatible) -> bool:
+    """Return whether an ICC profile can be opened and serialised.
+
+    Missing, damaged or unsupported profiles return ``False``; the input is
+    never modified.
+    """
+
+    try:
+        data = _profile_bytes(profile)
+    except ColorProfileError:
+        return False
+    return bool(data)
+
+
+def normalize_profile(
+    profile: _CmsProfileCompatible | None, *, default: str = "sRGB"
+) -> ImageCmsProfile:
+    """Return a valid profile, falling back to ``default`` when invalid.
+
+    ``None``, missing files, damaged data and unsupported colour spaces all
+    map to the fallback profile, so the result is deterministic.
+    """
+
+    if profile is not None:
+        try:
+            data = _profile_bytes(profile)
+        except ColorProfileError:
+            data = b""
+        if data:
+            return ImageCmsProfile(core.profile_frombytes(data))
+    if default not in ("sRGB", "LAB", "XYZ"):
+        msg = f"unknown fallback profile {default!r}"
+        raise ColorProfileError(msg)
+    return ImageCmsProfile(createProfile(default))  # type: ignore[arg-type]
+
+
+def _clamp_byte(value: float) -> int:
+    if value != value:  # NaN
+        return 0
+    if value <= 0:
+        return 0
+    if value >= 255:
+        return 255
+    return int(value + 0.5)
+
+
+def _srgb_lut(gamma: float) -> list[int]:
+    if gamma == 2.2:
+        return [
+            int(
+                (value / 12.92 if value <= 10 else ((value + 14.025) / 269.025) ** 2.4)
+                * 65535
+                + 0.5
+            )
+            for value in range(256)
+        ]
+    if gamma <= 0:
+        msg = "gamma must be positive"
+        raise PyCMSError(msg)
+    return [int(((value / 255.0) ** gamma) * 65535 + 0.5) for value in range(256)]
+
+
+def linearize(image: Image.Image, *, gamma: float = 2.2) -> Image.Image:
+    """Map 8-bit encoded samples to linear light, keeping 16-bit precision.
+
+    The transform is the standard sRGB curve.  ``gamma`` is the exponent of a
+    simple power approximation, used instead of the sRGB curve when it is not
+    2.2.  Grayscale images become mode "I" with values in 0..65535.  Colour
+    images lose precision when returned as 8-bit "RGB"; use
+    :func:`linearize_planes` for the full 16-bit planes.  Alpha, if present, is
+    carried through unchanged and is not linearized.
+    """
+
+    image.load()
+    mode = image.mode
+    if mode in ("L", "LA"):
+        planes = linearize_planes(image, gamma=gamma)
+        result = Image.frombytes("I;16", image.size, planes[0]).convert("I")
+        if mode == "LA":
+            alpha = image.getchannel("A")
+            return Image.merge("LA", [result.convert("L"), alpha])
+        return result
+    if mode in ("RGB", "RGBA"):
+        out = linearize_planes(image, gamma=gamma)
+        return _recombine_linear(image, out)
+    msg = f"cannot linearize images in mode {mode}"
+    raise PyCMSError(msg)
+
+
+def _recombine_linear(image: Image.Image, planes: tuple[bytes, ...]) -> Image.Image:
+    count = image.size[0] * image.size[1]
+    alpha = image.getchannel("A") if image.mode in ("LA", "RGBA") else None
+    colour = planes[:3] if len(planes) >= 3 else planes
+    high = bytearray(count * len(colour))
+    for channel, plane in enumerate(colour):
+        for index in range(count):
+            high[index * len(colour) + channel] = plane[index * 2]
+    mode = "RGB" if len(colour) == 3 else "L"
+    result = Image.frombytes(mode, image.size, bytes(high))
+    if alpha is not None:
+        result.putalpha(alpha)
+    return result
+
+
+def linearize_planes(image: Image.Image, *, gamma: float = 2.2) -> tuple[bytes, ...]:
+    """Return per-channel linear light samples as 16-bit big-endian bytes.
+
+    Alpha, if present, is copied unchanged and is not linearized.
+    """
+
+    image.load()
+    data = image.tobytes()
+    mode = image.mode
+    channels = len(mode)
+    lut = _srgb_lut(gamma)
+    alpha_channel = channels - 1 if mode in ("LA", "RGBA") else None
+    planes = [bytearray(len(data) // channels * 2) for _ in range(channels)]
+    for index, value in enumerate(data):
+        channel = index % channels
+        target = (index // channels) * 2
+        if channel == alpha_channel:
+            encoded = value * 257
+        else:
+            encoded = lut[value]
+        planes[channel][target] = encoded >> 8
+        planes[channel][target + 1] = encoded & 0xFF
+    return tuple(bytes(plane) for plane in planes)
+
+
+def applyStages(
+    image: Image.Image,
+    *,
+    input_profile: _CmsProfileCompatible | None = None,
+    output_profile: _CmsProfileCompatible | None = None,
+    gamma: float = 1.0,
+    linear: bool = False,
+    output_mode: str | None = None,
+    rendering_intent: Intent = Intent.PERCEPTUAL,
+    flags: Flags = Flags.NONE,
+) -> Image.Image:
+    """Run the fixed colour management stages on a copy of ``image``.
+
+    The stages always run in the order :class:`Stage` describes:
+
+    1. ``LINEARIZE``: optionally decode the source to linear light.  When the
+       ICC transform follows, the profile expects encoded samples, so the
+       stage is skipped and instead applied to the transform result.
+    2. ``TRANSFORM``: apply the ICC transform.  A missing or invalid profile
+       is replaced by sRGB, deterministically.
+    3. ``GAMMA``: apply ``gamma`` to linear light values.
+    4. ``ENCODE``: write the result in ``output_mode``.
+
+    Alpha is *not* premultiplied: the alpha channel is carried through
+    unchanged.  The source image is never modified, even on failure.
+    """
+
+    image.load()
+    source = image.copy()
+    mode = output_mode or image.mode
+    result = source
+    if input_profile is not None or output_profile is not None:
+        profile_in = normalize_profile(input_profile)
+        profile_out = normalize_profile(output_profile)
+        try:
+            transform = ImageCmsTransform(
+                profile_in,
+                profile_out,
+                image.mode,
+                mode,
+                rendering_intent,
+                flags=flags,
+            )
+        except (OSError, TypeError, ValueError) as e:
+            raise ColorProfileError(e) from e
+        result = transform.apply(source)
+    elif mode != source.mode:
+        result = source.convert(mode)
+    if gamma != 1.0 and gamma <= 0:
+        msg = "gamma must be positive"
+        raise PyCMSError(msg)
+    if linear or gamma != 1.0:
+        result = _apply_linear_stage(result, gamma=gamma)
+    return result
+
+
+def _apply_linear_stage(image: Image.Image, *, gamma: float) -> Image.Image:
+    """Apply the LINEARIZE and GAMMA stages on the colour channels.
+
+    Alpha is carried through unchanged.  Modes without an alpha channel are
+    kept; "LA" and "RGBA" preserve their alpha band.
+    """
+
+    mode = image.mode
+    if mode not in ("L", "LA", "RGB", "RGBA"):
+        msg = f"cannot apply gamma to images in mode {mode}"
+        raise PyCMSError(msg)
+    planes = linearize_planes(image, gamma=2.2)
+    if gamma != 1.0:
+        planes = _gamma_correct(planes, gamma)
+    if mode == "LA":
+        colour = planes[:1]
+    elif mode == "RGBA":
+        colour = planes[:3]
+    else:
+        colour = planes
+    return _from_linear_planes(image, colour, mode)
+
+
+def _gamma_correct(planes: tuple[bytes, ...], gamma: float) -> tuple[bytes, ...]:
+    if gamma == 1.0:
+        return planes
+    out = []
+    for plane in planes:
+        corrected = bytearray(len(plane))
+        for index in range(0, len(plane), 2):
+            value = (plane[index] << 8) | plane[index + 1]
+            linear = value / 65535.0
+            encoded = linear**gamma
+            result = min(65535, int(encoded * 65535 + 0.5))
+            corrected[index] = result >> 8
+            corrected[index + 1] = result & 0xFF
+        out.append(bytes(corrected))
+    return tuple(out)
+
+
+def _from_linear_planes(
+    image: Image.Image, planes: tuple[bytes, ...], mode: str
+) -> Image.Image:
+    size = image.size
+    count = size[0] * size[1]
+    channels = len(planes)
+    out = bytearray(count * channels)
+    for channel, plane in enumerate(planes):
+        for index in range(count):
+            out[index * channels + channel] = plane[index * 2]
+    result_mode = "L" if channels == 1 else "RGB"
+    result = Image.frombytes(result_mode, size, bytes(out))
+    if mode in ("LA", "RGBA"):
+        result.putalpha(image.getchannel("A"))
+    return result
+
+
+def repeatTransform(
+    image: Image.Image,
+    transform: ImageCmsTransform,
+    count: int = 2,
+    *,
+    in_place: bool = False,
+) -> Image.Image:
+    """Apply ``transform`` ``count`` times, deterministically.
+
+    ``count`` must be at least 1.  When ``in_place`` is true, the first pass
+    reads from ``image`` and writes a copy; later passes read the copy, so the
+    source is unchanged when the mode can round-trip and, when not, the source
+    is still never partly overwritten.
+    """
+
+    if count < 1:
+        msg = "count must be at least 1"
+        raise PyCMSError(msg)
+    if image.mode != transform.input_mode:
+        msg = "mode mismatch"
+        raise PyCMSError(msg)
+    if in_place and transform.input_mode != transform.output_mode:
+        msg = "cannot use in-place transform between different modes"
+        raise PyCMSError(msg)
+    if in_place:
+        current = image.copy()
+        for _ in range(count):
+            transform.apply_in_place(current)
+        image.paste(current)
+        return image
+    current = image
+    for _ in range(count):
+        current = transform.apply(current)
+    return current

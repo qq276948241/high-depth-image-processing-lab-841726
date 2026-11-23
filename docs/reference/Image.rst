@@ -91,6 +91,13 @@ Generating images
 .. autofunction:: linear_gradient
 .. autofunction:: radial_gradient
 
+High depth images
+^^^^^^^^^^^^^^^^^
+
+.. autofunction:: open_high_depth
+.. autofunction:: quantize_high_depth
+.. autofunction:: save_high_depth
+
 Registering plugins
 ^^^^^^^^^^^^^^^^^^^
 

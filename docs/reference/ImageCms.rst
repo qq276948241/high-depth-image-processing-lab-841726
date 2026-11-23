@@ -16,10 +16,16 @@ Cazabon's PyCMS library.
     :undoc-members:
     :show-inheritance:
 .. autoexception:: PyCMSError
+.. autoexception:: ColorProfileError
 
 Constants
 ---------
 
+.. autoclass:: Stage
+    :members:
+    :member-order: bysource
+    :undoc-members:
+    :show-inheritance:
 .. autoclass:: Intent
     :members:
     :member-order: bysource
@@ -39,11 +45,17 @@ Constants
 Functions
 ---------
 
+.. autofunction:: applyStages
 .. autofunction:: applyTransform
 .. autofunction:: buildProofTransform
 .. autofunction:: buildProofTransformFromOpenProfiles
 .. autofunction:: buildTransform
 .. autofunction:: buildTransformFromOpenProfiles
+.. autofunction:: linearize
+.. autofunction:: linearize_planes
+.. autofunction:: normalize_profile
+.. autofunction:: repeatTransform
+.. autofunction:: validateProfile
 .. autofunction:: createProfile
 .. autofunction:: getDefaultIntent
 .. autofunction:: getOpenProfile

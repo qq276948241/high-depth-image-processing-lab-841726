@@ -1220,6 +1220,17 @@ class Image:
                 return new_im
 
         if mode == "P" and palette == Palette.ADAPTIVE:
+            from . import Quantize as _Quantize
+
+            if self.mode in _Quantize.HIGH_DEPTH_MODES:
+                new_im = _Quantize.quantize(
+                    self,
+                    colors,
+                    dither=dither is None or dither != Dither.NONE,
+                )
+                if delete_trns:
+                    new_im.info.pop("transparency", None)
+                return new_im
             im = self.im.quantize(colors)
             new_im = self._new(im)
             from . import ImagePalette
@@ -1325,6 +1336,24 @@ class Image:
         """
 
         self.load()
+
+        from . import Quantize as _Quantize
+
+        if palette is not None and self.mode in _Quantize.HIGH_DEPTH_MODES:
+            return _Quantize.quantize_to_palette(
+                self,
+                palette,
+                dither=dither != Dither.NONE,
+            )
+
+        if self.mode in _Quantize.HIGH_DEPTH_MODES and method in (
+            None,
+            Quantize.MEDIANCUT,
+        ):
+            # The core quantizer is limited to 8-bit "L", "RGB" and "RGBA"
+            # data.  High depth and alpha modes use the deterministic Python
+            # path, which keeps the source sample depth.
+            return _Quantize.quantize(self, colors, dither=dither != Dither.NONE)
 
         if method is None:
             # defaults:
@@ -4086,6 +4115,117 @@ def radial_gradient(mode: str) -> Image:
     :param mode: Input mode.
     """
     return Image()._new(core.radial_gradient(mode))
+
+
+# --------------------------------------------------------------------
+# High depth helpers
+#
+# These are thin, public entry points for the high depth layer.  The heavy
+# lifting lives in :mod:`PIL.HighDepth` and :mod:`PIL.Quantize`; exposing the
+# helpers from :mod:`PIL.Image` keeps ``Image.HighDepth`` style calls working
+# without importing a private module.
+
+
+def open_high_depth(
+    fp: StrOrBytesPath | IO[bytes] | bytes,
+    *,
+    frame: int = 0,
+    budget: Any = None,
+) -> Image:
+    """
+    Open a PNG, TIFF or BMP file with full precision sample metadata.
+
+    Unlike :py:func:`open`, the source may be a path, a binary file object,
+    a bytes object or an iterable of byte chunks, and all of them return the
+    same pixels and metadata.  Structural errors raise
+    :class:`PIL.HighDepth.DecodeError` before any large buffer is allocated.
+
+    :param fp: A path, binary file object, bytes object or chunk iterable.
+    :param frame: TIFF frame number.
+    :param budget: Optional :class:`PIL.HighDepth.MemoryBudget`.
+    :returns: The decoded :py:class:`~PIL.Image.Image`.  Full precision planes
+        are available through :func:`PIL.HighDepth.decode`.
+    """
+
+    from . import HighDepth
+
+    return HighDepth.read(fp, frame=frame, budget=budget)
+
+
+def quantize_high_depth(
+    im: Image,
+    colors: int = 256,
+    *,
+    dither: bool = True,
+    budget: Any = None,
+) -> Image:
+    """
+    Quantize a high depth image to at most ``colors`` palette entries.
+
+    This is the public entry point for the deterministic quantizer used by
+    :py:meth:`~PIL.Image.Image.quantize` for "I;16", "I", "LA" and "PA"
+    images.  Repeated calls with the same arguments produce identical bytes.
+
+    :param im: The image to quantize.
+    :param colors: Target palette size, 1 to 256.
+    :param dither: Apply Floyd-Steinberg error diffusion.
+    :param budget: Optional :class:`PIL.HighDepth.MemoryBudget`.
+    :returns: A "P" image.
+    """
+
+    from . import Quantize
+
+    return Quantize.quantize(im, colors, dither=dither, budget=budget)
+
+
+def save_high_depth(
+    im: Image,
+    fp: StrOrBytesPath | IO[bytes],
+    *,
+    format: str | None = None,
+    save_all: bool = False,
+    append_images: Any = (),
+    budget: Any = None,
+    cancel: Any = None,
+    icc_profile: bytes | None = None,
+    dpi: tuple[float, float] | None = None,
+    page_order: Any = None,
+) -> None:
+    """
+    Save an image as a high depth PNG, TIFF or BMP file.
+
+    Unlike :py:meth:`~PIL.Image.Image.save`, the decoded size is checked
+    against an optional ``budget`` before pixels are read, the encoder can be
+    cancelled between blocks through ``cancel``, and output written to a path
+    only replaces the destination once the whole image is encoded.
+
+    :param im: The image to save.
+    :param fp: A path or a binary file object.
+    :param format: "PNG", "TIFF" or "BMP"; inferred from a path extension when
+        omitted.
+    :param save_all: Write ``im`` and ``append_images`` as multiple TIFF pages.
+    :param append_images: Additional pages, in order.
+    :param budget: Optional :class:`PIL.HighDepth.MemoryBudget`.
+    :param cancel: Optional :class:`PIL.HighDepthWrite.Cancel`.
+    :param icc_profile: ICC profile to embed (PNG only).
+    :param dpi: Resolution metadata.
+    :param page_order: Optional permutation of page indices.
+    """
+
+    from . import HighDepthWrite
+
+    HighDepthWrite.save(
+        im,
+        fp,
+        format=format,
+        save_all=save_all,
+        append_images=append_images,
+        budget=budget,
+        cancel=cancel,
+        icc_profile=icc_profile,
+        dpi=dpi,
+        page_order=page_order,
+    )
 
 
 # --------------------------------------------------------------------

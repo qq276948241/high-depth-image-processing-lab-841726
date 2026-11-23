@@ -552,7 +552,13 @@ class PngStream(ChunkStream):
                     value = int(min(1, value / max_value) * 255)
                 self.im_info["transparency"] = value
             elif self.im_mode == "RGB":
-                self.im_info["transparency"] = i16(s), i16(s, 2), i16(s, 4)
+                value = i16(s), i16(s, 2), i16(s, 4)
+                if self.im_rawmode == "RGB;16B":
+                    # 16-bit truecolour is unpacked to 8 bits per channel by
+                    # keeping the high byte, so the transparent colour must be
+                    # converted the same way to stay comparable.
+                    value = tuple(channel >> 8 for channel in value)
+                self.im_info["transparency"] = value
         return s
 
     def chunk_gAMA(self, pos: int, length: int) -> bytes:
